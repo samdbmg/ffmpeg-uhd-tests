@@ -38,8 +38,9 @@
 #include <libavutil/timestamp.h>
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
-#define STREAM_DURATION   10.0
 #define STREAM_FRAME_RATE 25 /* 25 images/s */
+#define REPEAT_EVERY_LINES 100
+#define STREAM_DURATION   (3840 * 2160 / REPEAT_EVERY_LINES) / STREAM_FRAME_RATE
 #define STREAM_PIX_FMT    AV_PIX_FMT_YUV420P /* default pix_fmt */
 #define SCALE_FLAGS SWS_BICUBIC
 // a wrapper around a single output AVStream
@@ -194,17 +195,28 @@ static void open_video(AVFormatContext *oc, AVCodec *codec, OutputStream *ost, A
 static void fill_yuv_image(AVFrame *pict, int frame_index,
                            int width, int height)
 {
-    int x, y, i;
-    i = frame_index;
-    /* Y */
-    for (y = 0; y < height; y++)
-        for (x = 0; x < width; x++)
-            pict->data[0][y * pict->linesize[0] + x] = x + y + i * 3;
+    /* Map frame_index down to pixel index */
+    int pixel_index = frame_index % (REPEAT_EVERY_LINES * width);
+
+    /* Fill the Y plane */
+    const repeat_blocks = height / REPEAT_EVERY_LINES;
+
+    for (int i = 0; i < width * REPEAT_EVERY_LINES; i++) {
+        for (int block = 0; block < repeat_blocks; block++) {
+            int pixel_location = i + block * width * REPEAT_EVERY_LINES;
+            if (i < pixel_index) {
+                pict->data[0][pixel_location] = 255;
+            } else {
+                pict->data[0][pixel_location] = 0;
+            }
+        }
+    }
+
     /* Cb and Cr */
-    for (y = 0; y < height / 2; y++) {
-        for (x = 0; x < width / 2; x++) {
-            pict->data[1][y * pict->linesize[1] + x] = 128 + y + i * 2;
-            pict->data[2][y * pict->linesize[2] + x] = 64 + x + i * 5;
+    for (int y = 0; y < height / 2; y++) {
+        for (int x = 0; x < width / 2; x++) {
+            pict->data[1][y * pict->linesize[1] + x] = 128;
+            pict->data[2][y * pict->linesize[2] + x] = 128;
         }
     }
 }
