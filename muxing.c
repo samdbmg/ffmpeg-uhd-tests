@@ -311,6 +311,8 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "-flags") || !strcmp(argv[i], "-fflags"))
             av_dict_set(&opt, argv[i]+1, argv[i+1], 0);
     }
+    av_register_all();
+
     /* allocate the output media context */
     avformat_alloc_output_context2(&oc, NULL, NULL, filename);
     if (!oc) {
