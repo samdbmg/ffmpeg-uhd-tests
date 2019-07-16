@@ -207,7 +207,8 @@ static void fill_yuv_image(AVFrame *pict, int frame_index, int width, int height
             int pixel_location = i + block * width * repeat_every_lines;
             if (pixel_location > width * height) {
                 break;  // We've reached the end of the partial block at the end of the frame.
-            } else if (i < pixel_index) {
+            } else if (i == pixel_index) {  // Flash mode
+            // } else if (i < pixel_index) {  // Scroll mode
                 pict->data[0][pixel_location] = 255;
             } else {
                 pict->data[0][pixel_location] = 0;
