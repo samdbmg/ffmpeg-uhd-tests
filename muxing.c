@@ -39,10 +39,13 @@
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
 #define STREAM_FRAME_RATE 25 /* 25 images/s */
-#define REPEAT_EVERY_LINES 100
-#define STREAM_DURATION   (3840 * 2160 / REPEAT_EVERY_LINES) / STREAM_FRAME_RATE
 #define STREAM_PIX_FMT    AV_PIX_FMT_YUV420P /* default pix_fmt */
 #define SCALE_FLAGS SWS_BICUBIC
+
+// TODO: Pass config down from main, rather than using global variables!
+int REPEAT_EVERY_LINES;
+int STREAM_DURATION;
+
 // a wrapper around a single output AVStream
 typedef struct OutputStream {
     AVStream *st;
@@ -74,9 +77,8 @@ static int write_frame(AVFormatContext *fmt_ctx, const AVRational *time_base, AV
     return av_interleaved_write_frame(fmt_ctx, pkt);
 }
 /* Add an output stream. */
-static void add_stream(OutputStream *ost, AVFormatContext *oc,
-                       AVCodec **codec,
-                       enum AVCodecID codec_id)
+static void add_stream(OutputStream *ost, AVFormatContext *oc, AVCodec **codec, enum AVCodecID codec_id,
+    int frame_width, int frame_height)
 {
     AVCodecContext *c;
     int i;
@@ -104,8 +106,8 @@ static void add_stream(OutputStream *ost, AVFormatContext *oc,
         c->codec_id = codec_id;
         c->bit_rate = 100000000;
         /* Resolution must be a multiple of two. */
-        c->width    = 3840;
-        c->height   = 2160;
+        c->width    = frame_width;
+        c->height   = frame_height;
         /* timebase: This is the fundamental unit of time (in seconds) in terms
          * of which frame timestamps are represented. For fixed-fps content,
          * timebase should be 1/framerate and timestamp increments should be
@@ -192,19 +194,20 @@ static void open_video(AVFormatContext *oc, AVCodec *codec, OutputStream *ost, A
     }
 }
 /* Prepare a dummy image. */
-static void fill_yuv_image(AVFrame *pict, int frame_index,
-                           int width, int height)
+static void fill_yuv_image(AVFrame *pict, int frame_index, int width, int height, int repeat_every_lines)
 {
     /* Map frame_index down to pixel index */
-    int pixel_index = frame_index % (REPEAT_EVERY_LINES * width);
+    int pixel_index = frame_index % (repeat_every_lines * width);
 
     /* Fill the Y plane */
-    const repeat_blocks = height / REPEAT_EVERY_LINES;
+    const repeat_blocks = (height / repeat_every_lines) + 1;
 
-    for (int i = 0; i < width * REPEAT_EVERY_LINES; i++) {
+    for (int i = 0; i < width * repeat_every_lines; i++) {
         for (int block = 0; block < repeat_blocks; block++) {
-            int pixel_location = i + block * width * REPEAT_EVERY_LINES;
-            if (i < pixel_index) {
+            int pixel_location = i + block * width * repeat_every_lines;
+            if (pixel_location > width * height) {
+                break;  // We've reached the end of the partial block at the end of the frame.
+            } else if (i < pixel_index) {
                 pict->data[0][pixel_location] = 255;
             } else {
                 pict->data[0][pixel_location] = 0;
@@ -246,12 +249,12 @@ static AVFrame *get_video_frame(OutputStream *ost)
                 exit(1);
             }
         }
-        fill_yuv_image(ost->tmp_frame, ost->next_pts, c->width, c->height);
+        fill_yuv_image(ost->tmp_frame, ost->next_pts, c->width, c->height, REPEAT_EVERY_LINES);
         sws_scale(ost->sws_ctx, (const uint8_t * const *) ost->tmp_frame->data,
                   ost->tmp_frame->linesize, 0, c->height, ost->frame->data,
                   ost->frame->linesize);
     } else {
-        fill_yuv_image(ost->frame, ost->next_pts, c->width, c->height);
+        fill_yuv_image(ost->frame, ost->next_pts, c->width, c->height, REPEAT_EVERY_LINES);
     }
     ost->frame->pts = ost->next_pts++;
     return ost->frame;
@@ -308,17 +311,21 @@ int main(int argc, char **argv)
     int encode_video = 0;
     AVDictionary *opt = NULL;
     int i;
-    if (argc < 2) {
-        printf("usage: %s output_file\n"
-               "API example program to output a media file with libavformat.\n"
-               "This program generates a synthetic audio and video stream, encodes and\n"
+    if (argc < 5) {
+        printf("usage: %s output_file width height repeat_every_lines\n"
+               "Turn on each pixel in a line to test it. Repeats pattern every repeat_every_lines\n"
+               "Generates an H.264 file of the given width and height\n"
                "muxes them into a file named output_file.\n"
                "The output format is automatically guessed according to the file extension.\n"
-               "Raw images can also be output by using '%%d' in the filename.\n"
                "\n", argv[0]);
         return 1;
     }
     filename = argv[1];
+    int frame_width = strtol(argv[2], NULL, 10);
+    int frame_height = strtol(argv[3], NULL, 10);
+    REPEAT_EVERY_LINES = strtol(argv[4], NULL, 10);
+    STREAM_DURATION = (frame_width * frame_height / REPEAT_EVERY_LINES) / STREAM_FRAME_RATE;
+
     for (i = 2; i+1 < argc; i+=2) {
         if (!strcmp(argv[i], "-flags") || !strcmp(argv[i], "-fflags"))
             av_dict_set(&opt, argv[i]+1, argv[i+1], 0);
@@ -337,7 +344,7 @@ int main(int argc, char **argv)
     /* Add the audio and video streams using the default format codecs
      * and initialize the codecs. */
     if (fmt->video_codec != AV_CODEC_ID_NONE) {
-        add_stream(&video_st, oc, &video_codec, fmt->video_codec);
+        add_stream(&video_st, oc, &video_codec, fmt->video_codec, frame_width, frame_height);
         have_video = 1;
         encode_video = 1;
     }
